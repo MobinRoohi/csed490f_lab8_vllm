@@ -1,3 +1,4 @@
+import argparse
 import time
 import torch
 from vllm import LLM, SamplingParams
@@ -13,7 +14,13 @@ PROMPT = "Explain the concept of attention mechanism in transformers."
 SAMPLING_PARAMS = SamplingParams(temperature=0.7, max_tokens=256)
 GPU_MEMORY_UTILIZATION = 0.8
 
-def run_inference(use_paged_attention: bool, batch_size: int):
+SPEC_CONFIG = {
+    "method": "draft_model",
+    "model": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "num_speculative_tokens": 5,
+}
+
+def run_inference(use_paged_attention: bool, batch_size: int, use_spec: bool = False, model_name: str = MODEL_NAME):
     """
         PagedAttention ON: block size 16
         PagedAttention OFF simulated : block size 2048
@@ -23,7 +30,12 @@ def run_inference(use_paged_attention: bool, batch_size: int):
 
     # Model load
     start = time.time()
-    llm = LLM(model=MODEL_NAME, dtype=torch.float16, gpu_memory_utilization=GPU_MEMORY_UTILIZATION, block_size=block_size)
+    llm_kwargs = dict(model=model_name, dtype=torch.float16,
+                      gpu_memory_utilization=GPU_MEMORY_UTILIZATION, block_size=block_size)
+    if use_spec:
+        llm_kwargs["speculative_config"] = SPEC_CONFIG
+        # llm_kwargs["max_model_len"] = 2048
+    llm = LLM(**llm_kwargs)
     load_time = time.time() - start
     print(f"Model load time: {load_time:.2f}s")
 
@@ -50,16 +62,36 @@ if __name__ == '__main__':
     # ============================================
     # Run
     # ============================================
-    results = []
-    for batch_size in [8]:
-        for paged in [True, False]:
-            res = run_inference(use_paged_attention=paged, batch_size=batch_size)
-            results.append((paged, batch_size, *res))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=MODEL_NAME)
+    parser.add_argument("--batch-sizes", type=int, nargs="+", default=None)
+    parser.add_argument("--spec", action="store_true", help="Step 2-4: speculative decoding experiment")
+    args = parser.parse_args()
 
-    # ============================================
-    # Results
-    # ============================================
-    print("\n=== Summary ===")
-    print(f"{'PagedAttn':<12}{'Batch':<8}{'Latency(s)':<12}{'Throughput(tok/s)':<20}")
-    for paged, bsz, lat, thpt in results:
-        print(f"{'ON' if paged else 'OFF':<12}{bsz:<8}{lat:<12.2f}{thpt:<20.1f}")
+    if args.spec:
+        spec_results = []
+        for batch_size in args.batch_sizes or [1, 8, 32]:
+            for spec in [False, True]:
+                res = run_inference(use_paged_attention=True, batch_size=batch_size,
+                                    use_spec=spec, model_name=args.model)
+                spec_results.append((spec, batch_size, *res))
+
+        print("\n=== Speculative Decoding Summary ===")
+        print(f"{'SpecDec':<12}{'Batch':<8}{'Latency(s)':<12}{'Throughput(tok/s)':<20}")
+        for spec, bsz, lat, thpt in spec_results:
+            print(f"{'ON' if spec else 'OFF':<12}{bsz:<8}{lat:<12.2f}{thpt:<20.1f}")
+    else:
+        results = []
+        for batch_size in args.batch_sizes or [8]:
+            for paged in [True, False]:
+                res = run_inference(use_paged_attention=paged, batch_size=batch_size,
+                                    model_name=args.model)
+                results.append((paged, batch_size, *res))
+
+        # ============================================
+        # Results
+        # ============================================
+        print("\n=== Summary ===")
+        print(f"{'PagedAttn':<12}{'Batch':<8}{'Latency(s)':<12}{'Throughput(tok/s)':<20}")
+        for paged, bsz, lat, thpt in results:
+            print(f"{'ON' if paged else 'OFF':<12}{bsz:<8}{lat:<12.2f}{thpt:<20.1f}")
