@@ -44,12 +44,16 @@ def run_transformers_inference(batch_size: int):
 
     start = time.time()
     inputs = tokenizer(PROMPTS, return_tensors="pt", padding=True).to(device="cuda")
-    outputs = llm.generate(**inputs, temperature=TEMPERATURE, max_length=MAX_LENGTH)
+    outputs = llm.generate(**inputs, temperature=TEMPERATURE, max_new_tokens=MAX_LENGTH)
     decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
     infer_time = time.time() - start
 
     # throughput calculation
-    tokens_generated = sum(len(o) for o in outputs)
+    # count only generated tokens, up to and including the first EOS (as vLLM does)
+    tokens_generated = 0
+    for row in outputs[:, inputs["input_ids"].shape[1]:]:
+        eos_pos = (row == tokenizer.eos_token_id).nonzero()
+        tokens_generated += int(eos_pos[0]) + 1 if len(eos_pos) else len(row)
     throughput = tokens_generated / infer_time
 
     print(f"Transformers Inference time: {infer_time:.2f}s")
